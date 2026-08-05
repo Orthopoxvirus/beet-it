@@ -1,0 +1,49 @@
+# Optional dependencies for common beets plugins.
+#
+# beets 2.6 ships the *code* for most of these plugins in the `beetsplug`
+# package, but not their Python dependencies. A user who lists `plugins:
+# - lastgenre` in their config gets `ModuleNotFoundError: No module named
+# 'pylast'` on backend startup unless the dep is installed here.
+#
+# Install into the running container with:
+#
+#   docker compose exec backend pip install -r requirements-beets-plugins.txt
+#   docker compose exec celery-worker pip install -r requirements-beets-plugins.txt
+#   docker compose restart backend celery-worker
+#
+# Or add to your own Dockerfile layer if you want them baked into the image.
+#
+# Some plugins also need *system* packages — see docs/architecture.md#beets-plugin-dependencies.
+# Notably:
+#   - chroma  needs  chromaprint (provides /usr/bin/fpcalc)
+#   - convert needs  ffmpeg (already installed in the prod Dockerfile)
+
+# autobpm: BPM analysis via librosa — baked into the production image
+# (own Dockerfile layer, ~490 MB site-packages). Listed here for dev installs.
+# resampy is a hard requirement: autobpm loads audio with
+# res_type="kaiser_fast", which librosa only supports via resampy (not soxr).
+librosa>=0.10,<0.11
+resampy>=0.4
+
+# lastgenre: last.fm genre tagger
+pylast>=5.1.0
+
+# discogs: Discogs.com metadata source
+python3-discogs-client>=2.7.0
+
+# chroma: AcoustID fingerprint-based matching (needs fpcalc binary too)
+pyacoustid>=1.2.2
+
+# deezer: Deezer metadata source (uses `requests`, built-in, but pin for clarity)
+# requests is already pulled in by fastapi/httpx, leaving this commented.
+# requests>=2.31.0
+
+# If you use these, add them; none are auto-installed:
+#
+# beets-extrafiles    — copy lyrics/artwork/cuesheets alongside imports
+# beets-follow        — notify on new releases from tracked artists
+# beets-bandcamp      — Bandcamp source
+# beets-describe      — verbose tag inspector
+#
+# e.g.:
+# beets-extrafiles>=0.0.8

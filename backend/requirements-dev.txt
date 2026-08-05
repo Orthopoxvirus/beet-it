@@ -1,0 +1,27 @@
+# Development-only dependencies for the backend.
+#
+# Why a separate file?
+# The production image is built from requirements.txt; shipping pytest/ruff/mypy
+# into every container would double its size for no runtime benefit. For local
+# dev and for running tests inside an already-built container, install this
+# file explicitly:
+#
+#   # inside the container
+#   docker compose exec backend pip install -r requirements-dev.txt
+#   docker compose exec backend pytest
+#
+#   # local venv
+#   pip install -r requirements.txt -r requirements-dev.txt
+
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+pytest-mock>=3.12.0
+pytest-cov>=4.1.0
+
+# Linting & formatting
+ruff>=0.1.0
+black>=23.12.0
+mypy>=1.8.0
+
+# Already in requirements.txt but pinned for clarity — TestClient uses httpx
+httpx>=0.26.0

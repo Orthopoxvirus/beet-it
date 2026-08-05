@@ -1,0 +1,44 @@
+name: Build & publish images (GHCR)
+
+# Runs on the public GitHub repo. On every release tag (v*) it builds the
+# backend and frontend images and pushes them to the GitHub Container
+# Registry, named so that docker-compose.yaml picks them up directly:
+#
+#   IMAGE_PREFIX=ghcr.io/<owner>/beet-it IMAGE_TAG=v1.0.0 docker compose up -d
+#
+# Uses the workflow's built-in GITHUB_TOKEN — no extra secrets needed.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        component: [backend, frontend]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io \
+            -u "${{ github.actor }}" --password-stdin
+
+      - name: Build + push
+        env:
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          set -euo pipefail
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          image="ghcr.io/${owner}/beet-it/${COMPONENT}"
+          tag="${GITHUB_REF_NAME}"
+          docker build -t "$image:$tag" -t "$image:latest" "$COMPONENT/"
+          docker push "$image:$tag"
+          docker push "$image:latest"

@@ -1,0 +1,186 @@
+name: ${STACK_NAME}
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: ${STACK_NAME}-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-beets}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-beets}
+      POSTGRES_DB: ${POSTGRES_DB:-beets_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-beets} -d ${POSTGRES_DB:-beets_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # Redis Cache/Broker
+  redis:
+    image: redis:7-alpine
+    container_name: ${STACK_NAME}-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # FastAPI Backend
+  backend:
+    image: ${IMAGE_PREFIX:-beet-it}/backend:${IMAGE_TAG:-latest}
+    build: ./backend
+    container_name: ${STACK_NAME}-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-beets}:${POSTGRES_PASSWORD:-beets}@postgres:5432/${POSTGRES_DB:-beets_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      DEBUG: ${DEBUG:-false}
+      # Basic Authentication (Optional)
+      # Set both BASIC_AUTH_USER and BASIC_AUTH_PASSWORD to enable HTTP Basic Auth.
+      # When enabled, all endpoints (including /docs) require valid credentials.
+      # Leave unset or empty to disable authentication (default).
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:-}
+      BASIC_AUTH_PASSWORD: ${BASIC_AUTH_PASSWORD:-}
+      # Import Folder Watcher Configuration
+      ENABLE_IMPORT_WATCHERS: ${ENABLE_IMPORT_WATCHERS:-true}
+      SCAN_DEBOUNCE_SECONDS: ${SCAN_DEBOUNCE_SECONDS:-30}
+      SCAN_TIMEOUT_SECONDS: ${SCAN_TIMEOUT_SECONDS:-3600}
+    volumes:
+      - libraries_data:/data/libraries
+      - ./data/import:/data/import
+      - ./data/upload:/data/upload
+      - ./databases:/data/databases
+      - ./data/downloads:/data/downloads
+      - ./config:/config
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - internal
+
+  # Celery Worker
+  celery-worker:
+    image: ${IMAGE_PREFIX:-beet-it}/backend:${IMAGE_TAG:-latest}
+    build: ./backend
+    container_name: ${STACK_NAME}-celery-worker
+    restart: unless-stopped
+    command: celery -A app.celery_app worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-beets}:${POSTGRES_PASSWORD:-beets}@postgres:5432/${POSTGRES_DB:-beets_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      ENABLE_IMPORT_WATCHERS: ${ENABLE_IMPORT_WATCHERS:-true}
+      SCAN_DEBOUNCE_SECONDS: ${SCAN_DEBOUNCE_SECONDS:-30}
+      SCAN_TIMEOUT_SECONDS: ${SCAN_TIMEOUT_SECONDS:-3600}
+    volumes:
+      - libraries_data:/data/libraries
+      - ./data/import:/data/import
+      - ./data/upload:/data/upload
+      - ./databases:/data/databases
+      - ./data/downloads:/data/downloads
+      - ./config:/config
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Override healthcheck from Dockerfile - celery worker doesn't expose HTTP
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping 2>/dev/null | grep -q 'pong'"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    networks:
+      - internal
+
+  # Celery Beat Scheduler (for periodic tasks and watcher management)
+  celery-beat:
+    image: ${IMAGE_PREFIX:-beet-it}/backend:${IMAGE_TAG:-latest}
+    build: ./backend
+    container_name: ${STACK_NAME}-celery-beat
+    restart: unless-stopped
+    # --pidfile lets the healthcheck probe the live PID without needing pgrep,
+    # which is not installed in the python:3.11-slim base image.
+    command: celery -A app.celery_app beat --loglevel=info --pidfile=/tmp/celerybeat.pid --schedule=/tmp/celerybeat-schedule
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-beets}:${POSTGRES_PASSWORD:-beets}@postgres:5432/${POSTGRES_DB:-beets_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      ENABLE_IMPORT_WATCHERS: ${ENABLE_IMPORT_WATCHERS:-true}
+      SCAN_DEBOUNCE_SECONDS: ${SCAN_DEBOUNCE_SECONDS:-30}
+      SCAN_TIMEOUT_SECONDS: ${SCAN_TIMEOUT_SECONDS:-3600}
+    volumes:
+      - libraries_data:/data/libraries
+      - ./data/import:/data/import
+      - ./data/upload:/data/upload
+      - ./databases:/data/databases
+      - ./data/downloads:/data/downloads
+      - ./config:/config
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Celery beat has no HTTP endpoint and doesn't answer `inspect ping`
+    # (only workers do). Probe the pidfile we ask beat to write instead.
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/celerybeat.pid && kill -0 $(cat /tmp/celerybeat.pid) 2>/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - internal
+
+  # React Frontend (served via nginx)
+  frontend:
+    image: ${IMAGE_PREFIX:-beet-it}/frontend:${IMAGE_TAG:-latest}
+    build: ./frontend
+    container_name: ${STACK_NAME}-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    labels:
+      # Traefik timeout configuration for large file uploads
+      - "traefik.http.services.${STACK_NAME}-frontend.loadbalancer.server.port=80"
+      - "traefik.http.services.${STACK_NAME}-frontend.loadbalancer.passhostheader=true"
+      # Increase timeout for large uploads (10 minutes)
+      - "traefik.http.services.${STACK_NAME}-frontend.loadbalancer.responseForwardingTimeout=600s"
+      # Create middleware for upload timeout handling
+      - "traefik.http.middlewares.${STACK_NAME}-upload-timeout.buffering.maxRequestBodyBytes=4294967296"
+      - "traefik.http.middlewares.${STACK_NAME}-upload-timeout.buffering.retryExpression=IsNetworkError() && Attempts() < 2"
+    networks:
+      - internal
+
+volumes:
+  postgres_data:
+  libraries_data:
+
+networks:
+  internal:
+    driver: bridge

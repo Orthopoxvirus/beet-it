@@ -1,0 +1,78 @@
+# docker-compose.override.yaml.example
+# -------------------------------------------------------------------
+# Copy this file to `docker-compose.override.yaml` to customise the stack
+# without editing the tracked compose file (which would conflict on pull).
+# Docker Compose automatically merges docker-compose.override.yaml on top of
+# docker-compose.yaml when both exist.
+#
+#   cp docker-compose.override.yaml.example docker-compose.override.yaml
+#   # edit, then:
+#   docker compose up -d
+#
+# This file is gitignored — your customisations stay local.
+# -------------------------------------------------------------------
+
+services:
+  # --------------------------------------------------------------
+  # Publish the UI on a host port for local-only runs. If you're
+  # behind a reverse proxy (e.g. Traefik), skip this block.
+  # --------------------------------------------------------------
+  frontend:
+    ports:
+      - "8080:80"   # browse http://localhost:8080/
+
+  # --------------------------------------------------------------
+  # Publish the backend for direct API access during development
+  # (e.g. running `npm run dev` from the host with a proxy).
+  # --------------------------------------------------------------
+  # backend:
+  #   ports:
+  #     - "8000:8000"   # http://localhost:8000/docs
+
+  # --------------------------------------------------------------
+  # Point the app at an existing beets library on the host.
+  # Replicate the same three bind mounts on backend + celery-worker
+  # + celery-beat so the worker can resolve the same paths.
+  #
+  # See docs/existing-libraries.md for the full walkthrough.
+  # --------------------------------------------------------------
+  # backend:
+  #   volumes:
+  #     - /srv/music/rock:/data/libraries/rock:rw
+  #     - /srv/music/rock.db:/data/databases/rock.db:rw
+  #     # read-only mount for a library you only want to browse:
+  #     - /srv/music/archive:/data/libraries/archive:ro
+  #
+  # celery-worker:
+  #   volumes:
+  #     - /srv/music/rock:/data/libraries/rock:rw
+  #     - /srv/music/rock.db:/data/databases/rock.db:rw
+  #     - /srv/music/archive:/data/libraries/archive:ro
+  #
+  # celery-beat:
+  #   volumes:
+  #     - /srv/music/rock:/data/libraries/rock:rw
+  #     - /srv/music/rock.db:/data/databases/rock.db:rw
+  #     - /srv/music/archive:/data/libraries/archive:ro
+
+  # --------------------------------------------------------------
+  # Bind-mount the beets databases directory to a host path
+  # (instead of the default `databases_data` docker volume) so you
+  # can back it up with standard host tooling.
+  # --------------------------------------------------------------
+  # backend:
+  #   volumes:
+  #     - ./data/databases:/data/databases
+  # celery-worker:
+  #   volumes:
+  #     - ./data/databases:/data/databases
+  # celery-beat:
+  #   volumes:
+  #     - ./data/databases:/data/databases
+
+  # --------------------------------------------------------------
+  # Run a Postgres port-forward for `psql` access from the host.
+  # --------------------------------------------------------------
+  # postgres:
+  #   ports:
+  #     - "5432:5432"

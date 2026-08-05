@@ -1,0 +1,55 @@
+# Example beets library config. Copy to <slug>.yaml (e.g. `rock.yaml`) and
+# edit to point at your library's directory and DB. All paths are inside the
+# container — `/data/libraries/...`, `/data/databases/...`. Bind-mount from the
+# host via docker-compose.override.yaml (see ../docker-compose.override.yaml.example).
+#
+# See docs/existing-libraries.md for the full walkthrough, or edit via the UI
+# at /libraries/<slug>/settings.
+
+directory: /data/libraries/example
+library: /data/databases/example.db
+
+# Plugins you want active. Most of these ship built-in with beets 2.x; a few
+# need extra dependencies — see docs/architecture.md#beets-plugin-dependencies.
+plugins:
+  - musicbrainz
+  - fetchart
+  - embedart
+  - lastgenre
+  - replaygain
+  - scrub
+  # `inline` computes $multidisc for the disc-aware path templates below.
+  - inline
+
+import:
+  write: yes
+  copy: no
+  move: yes
+  # Resume interrupted imports. Accepts true/false/yes/no/ask.
+  resume: ask
+
+# Multi-disc releases repeat track numbers per disc, so templates keyed on
+# $track alone would render colliding paths ("01 - Title" on every disc) and
+# beets would overwrite one disc's files with another's. The
+# %if{$multidisc,$disc-} prefix only kicks in for multi-disc releases —
+# single-disc paths are unchanged.
+item_fields:
+  multidisc: 1 if disctotal > 1 else 0
+
+paths:
+  default: $albumartist/$album%aunique{}/%if{$multidisc,$disc-}$track - $title
+  singleton: Singles/$artist - $title
+  comp: Compilations/$album%aunique{}/%if{$multidisc,$disc-}$track - $title
+
+musicbrainz:
+  # Key is `search_limit` (with underscore), NOT `searchlimit`.
+  search_limit: 10
+
+# SECURITY: avoid putting plaintext API tokens/passwords in this file when
+# possible — see docs/architecture.md#secrets-in-library-configs for the
+# current state and workarounds.
+# discogs:
+#   user_token: YOUR_DISCOGS_TOKEN
+# spotify:
+#   client_id: YOUR_SPOTIFY_ID
+#   client_secret: YOUR_SPOTIFY_SECRET
