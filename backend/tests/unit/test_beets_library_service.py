@@ -1427,3 +1427,78 @@ class TestCoverVersion:
             # Without the root the relative path can't be stat'd → None.
             without_root, _ = beets_service.get_albums(db_path)
             assert without_root[0].cover_version is None
+
+
+class TestDeleteAlbum:
+    def test_delete_album_cleans_flexible_attribute_rows(self, beets_service):
+        """delete_album removes album/item attribute rows, not just the core
+        rows, and leaves other albums' attributes alone (#207)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "library.db")
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute(
+                "CREATE TABLE albums (id INTEGER PRIMARY KEY, album TEXT, "
+                "albumartist TEXT, artpath BLOB)"
+            )
+            cur.execute(
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, album_id INTEGER, "
+                "path BLOB)"
+            )
+            cur.execute(
+                "CREATE TABLE album_attributes (id INTEGER PRIMARY KEY, "
+                "entity_id INTEGER, key TEXT, value TEXT)"
+            )
+            cur.execute(
+                "CREATE TABLE item_attributes (id INTEGER PRIMARY KEY, "
+                "entity_id INTEGER, key TEXT, value TEXT)"
+            )
+            cur.execute(
+                "INSERT INTO albums VALUES (1, 'Geissbock Chärly', '', NULL)"
+            )
+            cur.execute("INSERT INTO albums VALUES (2, 'Süßer Klang', 'Über', NULL)")
+            cur.execute("INSERT INTO items VALUES (10, 1, X'2f676f6e65')")
+            cur.execute("INSERT INTO items VALUES (20, 2, X'2f6b657074')")
+            cur.execute(
+                "INSERT INTO album_attributes VALUES (1, 1, 'genre', 'Hörspiel')"
+            )
+            cur.execute("INSERT INTO album_attributes VALUES (2, 2, 'genre', 'Jazz')")
+            cur.execute("INSERT INTO item_attributes VALUES (1, 10, 'bpm', '120')")
+            cur.execute("INSERT INTO item_attributes VALUES (2, 20, 'bpm', '90')")
+            conn.commit()
+            conn.close()
+
+            assert beets_service.delete_album(db_path, 1) is True
+
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            assert cur.execute("SELECT id FROM albums").fetchall() == [(2,)]
+            assert cur.execute("SELECT id FROM items").fetchall() == [(20,)]
+            assert cur.execute(
+                "SELECT entity_id FROM album_attributes"
+            ).fetchall() == [(2,)]
+            assert cur.execute(
+                "SELECT entity_id FROM item_attributes"
+            ).fetchall() == [(20,)]
+            conn.close()
+
+    def test_delete_album_tolerates_missing_attribute_tables(self, beets_service):
+        """Minimal DBs without the attribute side tables still delete fine."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = os.path.join(tmp, "library.db")
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute(
+                "CREATE TABLE albums (id INTEGER PRIMARY KEY, album TEXT, "
+                "albumartist TEXT, artpath BLOB)"
+            )
+            cur.execute(
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, album_id INTEGER, "
+                "path BLOB)"
+            )
+            cur.execute("INSERT INTO albums VALUES (1, 'A', 'B', NULL)")
+            cur.execute("INSERT INTO items VALUES (10, 1, X'2f78')")
+            conn.commit()
+            conn.close()
+
+            assert beets_service.delete_album(db_path, 1) is True

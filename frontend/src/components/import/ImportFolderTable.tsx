@@ -1,5 +1,19 @@
 import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react'
 import { Loader2, FolderOpen, FileAudio, AlertCircle, ArrowRight, Play, Pause } from 'lucide-react'
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 import {
   Table,
@@ -9,6 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Input } from '@/components/ui/input'
 import { useQueryClient } from '@tanstack/react-query'
 import { useImportFolderItems } from '@/hooks/useImportFolderItems'
 import { scanKeys } from '@/hooks/useScanStatus'
@@ -19,6 +34,13 @@ import { useAudioOpJobs } from '@/components/beets-import/AudioOpJobsProvider'
 import type { ImportItem } from '@/types/scan'
 import type { ConvertAudioParams, ConvertTarget } from '@/types/beets-import'
 import type { ItemPreview, TagName } from '@/types/batch-tag-editor'
+import {
+  initTrackOrder,
+  applyManualNumber,
+  applyDragReorder,
+  trackOrderDiff,
+  type TrackOrderEntry,
+} from '@/lib/track-order'
 
 // ============================================================================
 // Types
@@ -41,6 +63,16 @@ interface ImportFolderTableProps {
    * scanned tags — no beets analysis required.
    */
   showSummary?: boolean
+  /**
+   * Batch editor's Track Number field is in Manual mode: rows become
+   * drag-sortable and the Track # cell turns into a number input.
+   */
+  manualTrackNumbers?: boolean
+  /**
+   * Reports the item-id → track-number map of manual edits (only tracks whose
+   * number differs from the scan) whenever the user types or drags.
+   */
+  onManualNumbersChange?: (values: Record<number, string>) => void
 }
 
 interface AlbumGroup {
@@ -328,21 +360,30 @@ function PreviewCell({ original, preview, maxWidthClass, center }: PreviewCellPr
 // Track Row with Preview Support
 // ============================================================================
 
-interface TrackRowProps {
+interface TrackRowCellsProps {
   item: ImportItem
   preview?: ItemPreview
   isPlaying: boolean
   onTogglePlay: (item: ImportItem) => void
+  /** Replaces the Track # preview cell (Manual mode's number input). */
+  trackNumberCell?: React.ReactNode
 }
 
-function TrackRow({ item, preview, isPlaying, onTogglePlay }: TrackRowProps) {
+/** The cells of one track row, shared by the plain and drag-sortable rows. */
+function TrackRowCells({
+  item,
+  preview,
+  isPlaying,
+  onTogglePlay,
+  trackNumberCell,
+}: TrackRowCellsProps) {
   // Helper to get preview value for a tag
   const getPreview = (tag: TagName): string | undefined => {
     return preview?.changes[tag]
   }
 
   return (
-    <TableRow>
+    <>
       <PlayButtonCell
         isPlaying={isPlaying}
         onToggle={() => onTogglePlay(item)}
@@ -374,16 +415,132 @@ function TrackRow({ item, preview, isPlaying, onTogglePlay }: TrackRowProps) {
         preview={getPreview('title')}
         maxWidthClass="max-w-[150px]"
       />
-      <PreviewCell
-        original={formatTrackNumber(item.trackNumber, item.trackTotal)}
-        preview={getPreview('track_number')}
-        maxWidthClass="w-[60px]"
-        center
-      />
+      {trackNumberCell ?? (
+        <PreviewCell
+          original={formatTrackNumber(item.trackNumber, item.trackTotal)}
+          preview={getPreview('track_number')}
+          maxWidthClass="w-[60px]"
+          center
+        />
+      )}
       <PreviewCell
         original={item.genre}
         preview={getPreview('genre')}
         maxWidthClass="max-w-[100px]"
+      />
+    </>
+  )
+}
+
+interface TrackRowProps {
+  item: ImportItem
+  preview?: ItemPreview
+  isPlaying: boolean
+  onTogglePlay: (item: ImportItem) => void
+}
+
+function TrackRow({ item, preview, isPlaying, onTogglePlay }: TrackRowProps) {
+  return (
+    <TableRow>
+      <TrackRowCells
+        item={item}
+        preview={preview}
+        isPlaying={isPlaying}
+        onTogglePlay={onTogglePlay}
+      />
+    </TableRow>
+  )
+}
+
+// ============================================================================
+// Manual Track Numbering (batch editor Manual mode)
+// ============================================================================
+
+interface ManualNumberCellProps {
+  entry: TrackOrderEntry
+  onCommit: (itemId: number, typedNumber: number) => void
+}
+
+/**
+ * Track # cell in Manual mode: a number input prefilled with the current
+ * number. Committing (blur / Enter) moves the track to the typed position —
+ * the table re-sorts and the other tracks shift automatically.
+ */
+function ManualNumberCell({ entry, onCommit }: ManualNumberCellProps) {
+  const [draft, setDraft] = useState(String(entry.number))
+
+  // Re-sync the input whenever a commit or drag renumbers this row.
+  useEffect(() => {
+    setDraft(String(entry.number))
+  }, [entry.number])
+
+  const commit = () => {
+    const typed = parseInt(draft, 10)
+    if (!Number.isFinite(typed) || typed < 1 || typed === entry.number) {
+      setDraft(String(entry.number))
+      return
+    }
+    onCommit(entry.itemId, typed)
+  }
+
+  return (
+    <TableCell className="w-[70px] text-center">
+      <Input
+        type="number"
+        min={1}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur()
+        }}
+        // Keep typing/selecting inside the input from starting a row drag.
+        onPointerDown={(e) => e.stopPropagation()}
+        className="h-8 w-16 text-center mx-auto"
+        aria-label="Track number"
+      />
+      {entry.originalNumber !== entry.number && (
+        <div className="mt-0.5 text-xs text-muted-foreground">
+          was {entry.originalNumber ?? '–'}
+        </div>
+      )}
+    </TableCell>
+  )
+}
+
+interface SortableTrackRowProps extends TrackRowProps {
+  entry: TrackOrderEntry
+  onCommitNumber: (itemId: number, typedNumber: number) => void
+}
+
+/** A track row that is drag-sortable and carries the manual number input. */
+function SortableTrackRow({
+  item,
+  preview,
+  isPlaying,
+  onTogglePlay,
+  entry,
+  onCommitNumber,
+}: SortableTrackRowProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: item.id })
+
+  return (
+    <TableRow
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`cursor-grab active:cursor-grabbing ${
+        isDragging ? 'relative z-10 bg-muted shadow-md' : ''
+      }`}
+      {...attributes}
+      {...listeners}
+    >
+      <TrackRowCells
+        item={item}
+        preview={preview}
+        isPlaying={isPlaying}
+        onTogglePlay={onTogglePlay}
+        trackNumberCell={<ManualNumberCell entry={entry} onCommit={onCommitNumber} />}
       />
     </TableRow>
   )
@@ -400,6 +557,8 @@ export default function ImportFolderTable({
   previewData,
   onItemsLoaded,
   showSummary = false,
+  manualTrackNumbers = false,
+  onManualNumbersChange,
 }: ImportFolderTableProps) {
   const { data, isLoading, error } = useImportFolderItems(librarySlug, path)
 
@@ -459,6 +618,73 @@ export default function ImportFolderTable({
       onItemsLoaded(visibleItems.map((item) => item.id))
     }
   }, [data?.items, visibleItems, onItemsLoaded])
+
+  // Manual track-numbering state: the ordered rows (with editable numbers) for
+  // this table while the batch editor's Track Number field is in Manual mode.
+  const [manualOrder, setManualOrder] = useState<TrackOrderEntry[] | null>(null)
+
+  // (Re)build the order when Manual mode turns on or the underlying items
+  // change — including their stored numbers, so a successful Apply (which
+  // refetches the items) resets the baseline instead of re-showing stale
+  // diffs. Turning Manual mode off clears the state.
+  useEffect(() => {
+    if (!manualTrackNumbers) {
+      setManualOrder(null)
+      return
+    }
+    setManualOrder((prev) => {
+      const itemsSignature = visibleItems
+        .map((i) => `${i.id}:${i.trackNumber ?? ''}`)
+        .sort()
+        .join(',')
+      const prevSignature = prev
+        ?.map((e) => `${e.itemId}:${e.originalNumber ?? ''}`)
+        .sort()
+        .join(',')
+      if (prev && itemsSignature === prevSignature) return prev
+      return initTrackOrder(
+        visibleItems.map((i) => ({
+          id: i.id,
+          trackNumber: i.trackNumber,
+          filename: i.filename ?? '',
+        }))
+      )
+    })
+  }, [manualTrackNumbers, visibleItems])
+
+  // Report the changed numbers upward so the batch editor can preview/apply.
+  useEffect(() => {
+    if (manualTrackNumbers && manualOrder && onManualNumbersChange) {
+      onManualNumbersChange(trackOrderDiff(manualOrder))
+    }
+  }, [manualTrackNumbers, manualOrder, onManualNumbersChange])
+
+  const handleCommitNumber = useCallback((itemId: number, typedNumber: number) => {
+    setManualOrder((prev) => (prev ? applyManualNumber(prev, itemId, typedNumber) : prev))
+  }, [])
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    setManualOrder((prev) => {
+      if (!prev) return prev
+      const from = prev.findIndex((e) => e.itemId === active.id)
+      const to = prev.findIndex((e) => e.itemId === over.id)
+      return applyDragReorder(prev, from, to)
+    })
+  }, [])
+
+  // Whole rows are draggable; the distance constraint keeps plain clicks
+  // (play button, input focus) from registering as drags.
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  )
+
+  const itemById = useMemo(() => {
+    const map = new Map<number, ImportItem>()
+    for (const item of visibleItems) map.set(item.id, item)
+    return map
+  }, [visibleItems])
 
   // Determine if we should show album intertitles
   const showIntertitles = albumGroups.length > 1
@@ -655,26 +881,54 @@ export default function ImportFolderTable({
         onError={() => setPlayingId(null)}
       />
 
-      {/* Table */}
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-[44px]">
-              <span className="sr-only">Play</span>
-            </TableHead>
-            <TableHead>Directory</TableHead>
-            <TableHead>Filename</TableHead>
-            <TableHead>Album</TableHead>
-            <TableHead>Album Artist</TableHead>
-            <TableHead>Artist</TableHead>
-            <TableHead>Title</TableHead>
-            <TableHead className="text-center">Track #</TableHead>
-            <TableHead>Genre</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {showIntertitles
-            ? albumGroups.map((group) => (
+      {/* Table. In Manual numbering mode the rows are one flat drag-sortable
+          list in the manual order (album intertitles would fight the single
+          ordering), each with its number input. */}
+      <DndContext
+        sensors={dndSensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-[44px]">
+                <span className="sr-only">Play</span>
+              </TableHead>
+              <TableHead>Directory</TableHead>
+              <TableHead>Filename</TableHead>
+              <TableHead>Album</TableHead>
+              <TableHead>Album Artist</TableHead>
+              <TableHead>Artist</TableHead>
+              <TableHead>Title</TableHead>
+              <TableHead className="text-center">Track #</TableHead>
+              <TableHead>Genre</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {manualTrackNumbers && manualOrder ? (
+              <SortableContext
+                items={manualOrder.map((e) => e.itemId)}
+                strategy={verticalListSortingStrategy}
+              >
+                {manualOrder.map((entry) => {
+                  const item = itemById.get(entry.itemId)
+                  if (!item) return null
+                  return (
+                    <SortableTrackRow
+                      key={item.id}
+                      item={item}
+                      preview={previewData?.get(item.id)}
+                      isPlaying={playingId === item.id}
+                      onTogglePlay={handleTogglePlay}
+                      entry={entry}
+                      onCommitNumber={handleCommitNumber}
+                    />
+                  )
+                })}
+              </SortableContext>
+            ) : showIntertitles ? (
+              albumGroups.map((group) => (
                 <React.Fragment key={group.album}>
                   <AlbumIntertitleRow album={group.album} />
                   {group.tracks.map((item) => (
@@ -688,7 +942,8 @@ export default function ImportFolderTable({
                   ))}
                 </React.Fragment>
               ))
-            : albumGroups[0]?.tracks.map((item) => (
+            ) : (
+              albumGroups[0]?.tracks.map((item) => (
                 <TrackRow
                   key={item.id}
                   item={item}
@@ -696,9 +951,11 @@ export default function ImportFolderTable({
                   isPlaying={playingId === item.id}
                   onTogglePlay={handleTogglePlay}
                 />
-              ))}
-        </TableBody>
-      </Table>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </DndContext>
     </div>
   )
 }

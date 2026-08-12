@@ -33,6 +33,9 @@ export interface MissingCoverAlbum {
   album_id: number
   title: string
   artist: string
+  /** True when the album folder itself is gone from disk (ghost entry) —
+   * cover search is pointless; the UI offers a DB-only removal instead. */
+  folder_missing: boolean
 }
 
 export interface MissingCoverResponse {

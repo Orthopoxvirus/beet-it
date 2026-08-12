@@ -43,6 +43,11 @@ def list_albums_missing_cover(
     An album counts as missing when its stored ``artpath`` points at a file
     that no longer exists *and* no cover file can be discovered in its folder
     (the same fallback the cover endpoint serves).
+
+    Each entry carries ``folder_missing``: True when the album's folder itself
+    is gone from disk (or the album has no items to derive a folder from) — a
+    ghost row left behind by a botched import. Cover search is pointless for
+    those; the UI offers a DB-only removal instead.
     """
     albums, _ = beets_service.get_albums(
         db_path, skip=0, limit=1_000_000, library_root=library_root
@@ -61,8 +66,16 @@ def list_albums_missing_cover(
         )
         if discovered and os.path.exists(discovered):
             continue
+        folder = beets_service._resolve_against_root(
+            beets_service.get_album_folder_path(db_path, album.id), library_root
+        )
         missing.append(
-            {"album_id": album.id, "title": album.title, "artist": album.artist}
+            {
+                "album_id": album.id,
+                "title": album.title,
+                "artist": album.artist,
+                "folder_missing": not (folder and os.path.isdir(folder)),
+            }
         )
     return missing
 

@@ -46,6 +46,20 @@ describe('ArtistFilter', () => {
     expect(onChange).toHaveBeenCalledWith([])
   })
 
+  it('disables album artists not in the current result and ignores clicks on them', () => {
+    const { onChange } = setup()
+    open()
+    // 'Aphex Twin' is an `others` entry — present but disabled.
+    const other = screen.getByRole('option', { name: 'Aphex Twin' })
+    expect(other).toBeDisabled()
+    expect(other).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(other)
+    expect(onChange).not.toHaveBeenCalled()
+    // An in-result artist stays interactive.
+    fireEvent.click(screen.getByRole('option', { name: 'Beethoven' }))
+    expect(onChange).toHaveBeenCalledWith(['Beethoven'])
+  })
+
   it('filters the visible list via the search box', () => {
     setup({ selected: ['Zappa'] })
     open()
@@ -60,5 +74,17 @@ describe('ArtistFilter', () => {
     open()
     fireEvent.click(screen.getByRole('button', { name: /clear 2 selected/i }))
     expect(onChange).toHaveBeenCalledWith([])
+  })
+
+  // Regression for #202: the list must scroll, not clip. A Radix ScrollArea
+  // root carried max-height + overflow-hidden and clipped long lists (its
+  // Viewport's height:100% can't resolve against a max-height-only parent).
+  // The options must therefore live in a bounded, natively scrollable box.
+  it('keeps the artist list in a bounded, natively scrollable container', () => {
+    setup()
+    open()
+    const scroller = screen.getByRole('option', { name: 'Beethoven' }).closest('.overflow-y-auto')
+    expect(scroller).not.toBeNull()
+    expect(scroller).toHaveClass('max-h-64')
   })
 })

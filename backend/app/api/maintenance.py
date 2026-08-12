@@ -92,9 +92,11 @@ async def search_album_cover(
     if album is None:
         raise HTTPException(status_code=404, detail="Album not found")
 
-    query = f"{album.artist} {album.title}".strip()
+    # Echo the actual free-text term used against iTunes/Deezer (album only,
+    # issue #210), not artist+album.
+    query = album.title.strip()
     results = await cover_search_service.search_cover_art(
-        artist=album.artist, album=album.title, mb_albumid=album.mb_albumid
+        album=album.title, mb_albumid=album.mb_albumid
     )
     return CoverSearchResponse(
         query=query, results=[CoverSearchResult(**r) for r in results]

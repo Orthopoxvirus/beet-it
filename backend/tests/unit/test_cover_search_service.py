@@ -8,7 +8,12 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services import cover_search_service
-from app.services.cover_search_service import _caa_candidates, _measure
+from app.services.cover_search_service import (
+    _caa_candidates,
+    _deezer_candidates,
+    _itunes_candidates,
+    _measure,
+)
 
 JPEG = b"\xFF\xD8\xFF\xE0" + b"\x00" * 32
 
@@ -86,3 +91,30 @@ class TestMeasureRedirects:
         with patch.object(cover_search_service, "_host_is_public", side_effect=host_public):
             result = asyncio.run(_measure(client, "https://example.com/c.jpg"))
         assert result is None
+
+
+class TestAlbumOnlyTerm:
+    """The free-text term sent to iTunes/Deezer is the album title only,
+    never artist+album (issue #210)."""
+
+    def test_itunes_term_is_album_only(self):
+        client = _client(_response(json_data={"results": []}))
+        asyncio.run(_itunes_candidates(client, "Die Känguru-Chroniken", 6))
+        _, kwargs = client.get.call_args
+        assert kwargs["params"]["term"] == "Die Känguru-Chroniken"
+
+    def test_deezer_term_is_album_only(self):
+        client = _client(_response(json_data={"data": []}))
+        asyncio.run(_deezer_candidates(client, "Die Känguru-Chroniken", 6))
+        _, kwargs = client.get.call_args
+        assert kwargs["params"]["q"] == "Die Känguru-Chroniken"
+
+    def test_itunes_blank_album_skips_request(self):
+        client = _client()
+        assert asyncio.run(_itunes_candidates(client, "   ", 6)) == []
+        client.get.assert_not_called()
+
+    def test_deezer_blank_album_skips_request(self):
+        client = _client()
+        assert asyncio.run(_deezer_candidates(client, "", 6)) == []
+        client.get.assert_not_called()

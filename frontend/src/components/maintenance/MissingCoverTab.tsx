@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Check, ImageOff, Loader2, Search } from 'lucide-react'
+import { Check, FolderX, ImageOff, Loader2, Search, Trash2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -10,9 +10,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { toast } from '@/components/ui/toast'
 import { CoverArtUpload } from '@/components/album/CoverArtUpload'
-import { useMissingCover } from '@/hooks/useMaintenance'
-import { searchCoverArt, downloadCoverArtFromUrl } from '@/api/albums'
+import { useMissingCover, useRemoveGhostAlbum } from '@/hooks/useMaintenance'
+import { AlbumApiError, searchCoverArt, downloadCoverArtFromUrl } from '@/api/albums'
 import type { CoverSearchResult } from '@/api/albums'
 import type { MissingCoverAlbum } from '@/api/maintenance'
 import { runPool } from '@/lib/concurrency'
@@ -29,6 +30,7 @@ const SEARCH_CONCURRENCY = 3
 
 type SearchPhase = 'idle' | 'searching' | 'done' | 'error'
 type ApplyPhase = 'idle' | 'applying' | 'applied' | 'error'
+type RemovePhase = 'idle' | 'removing' | 'removed' | 'error'
 
 interface RowState {
   search: SearchPhase
@@ -37,16 +39,27 @@ interface RowState {
   apply: ApplyPhase
   appliedUrl?: string
   applyError?: string
+  remove: RemovePhase
 }
 
 const DEFAULT_ROW: RowState = {
   search: 'idle',
   candidates: [],
   apply: 'idle',
+  remove: 'idle',
 }
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback
+}
+
+// The API's raw `detail` strings expose server paths — translate the common
+// failure into something a user can act on.
+function applyErrorMessage(err: unknown): string {
+  if (err instanceof AlbumApiError && err.status === 404) {
+    return 'Album folder not found on disk — the files may have been moved or deleted.'
+  }
+  return errorMessage(err, 'Failed to apply cover art')
 }
 
 // The wire `source` is the image host; map the common ones to friendly names.
@@ -108,6 +121,7 @@ export default function MissingCoverTab({ slug }: MissingCoverTabProps) {
     // (Re)search albums that haven't resolved yet; skip applied ones and ones
     // already searched/in-flight so a second click only retries what's left.
     const targets = rows.filter((album) => {
+      if (album.folder_missing) return false
       const s = rowStates[album.album_id]
       if (s?.apply === 'applied') return false
       if (s?.search === 'done' || s?.search === 'searching') return false
@@ -135,13 +149,34 @@ export default function MissingCoverTab({ slug }: MissingCoverTabProps) {
         await downloadCoverArtFromUrl(slug, albumId, url)
         patchRow(albumId, { apply: 'applied', appliedUrl: url })
       } catch (err) {
-        patchRow(albumId, {
-          apply: 'error',
-          applyError: errorMessage(err, 'Failed to apply cover art'),
+        const friendly = applyErrorMessage(err)
+        toast.error({
+          title: 'Could not apply cover art',
+          description: friendly,
         })
+        patchRow(albumId, { apply: 'error', applyError: friendly })
       }
     },
     [slug, patchRow]
+  )
+
+  const removeGhost = useRemoveGhostAlbum(slug)
+  const { mutateAsync: removeGhostAsync } = removeGhost
+  const handleRemove = useCallback(
+    async (albumId: number) => {
+      patchRow(albumId, { remove: 'removing' })
+      try {
+        await removeGhostAsync(albumId)
+        patchRow(albumId, { remove: 'removed' })
+      } catch (err) {
+        toast.error({
+          title: 'Could not remove album',
+          description: errorMessage(err, 'Failed to remove album'),
+        })
+        patchRow(albumId, { remove: 'error' })
+      }
+    },
+    [removeGhostAsync, patchRow]
   )
 
   if (isLoading && rows === null) {
@@ -163,12 +198,14 @@ export default function MissingCoverTab({ slug }: MissingCoverTabProps) {
   const resolvedCount = rows.filter(
     (a) => rowStates[a.album_id]?.apply === 'applied'
   ).length
+  const ghostCount = rows.filter((a) => a.folder_missing).length
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           {rows.length} album{rows.length === 1 ? '' : 's'} without cover art
+          {ghostCount > 0 && ` · ${ghostCount} with files missing on disk`}
           {resolvedCount > 0 && ` · ${resolvedCount} resolved this session`}.
         </p>
         <Button size="sm" onClick={handleSearchAll} disabled={bulkRunning}>
@@ -198,10 +235,11 @@ export default function MissingCoverTab({ slug }: MissingCoverTabProps) {
           {rows.map((album) => {
             const state = rowStates[album.album_id] ?? DEFAULT_ROW
             const isApplied = state.apply === 'applied'
+            const isRemoved = state.remove === 'removed'
             return (
               <TableRow
                 key={album.album_id}
-                className={cn(isApplied && 'opacity-50')}
+                className={cn((isApplied || isRemoved) && 'opacity-50')}
               >
                 <TableCell className="align-top">
                   <div className="font-medium">{album.artist || '—'}</div>
@@ -210,24 +248,58 @@ export default function MissingCoverTab({ slug }: MissingCoverTabProps) {
                   </div>
                 </TableCell>
 
-                <TableCell className="align-top">
-                  <CandidateCell
-                    state={state}
-                    onSearch={() => searchOne(album.album_id)}
-                    onApply={(url) => applyCandidate(album.album_id, url)}
-                  />
-                </TableCell>
+                {album.folder_missing ? (
+                  // Ghost entry: the folder is gone from disk, so cover
+                  // search/upload can only 404 — offer a DB-only removal.
+                  <>
+                    <TableCell className="align-top">
+                      <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
+                        <FolderX className="h-4 w-4" />
+                        {isRemoved
+                          ? 'Removed from library'
+                          : 'Files missing on disk — cover search unavailable'}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right align-top">
+                      {!isRemoved && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={state.remove === 'removing'}
+                          onClick={() => handleRemove(album.album_id)}
+                        >
+                          {state.remove === 'removing' ? (
+                            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4 mr-1" />
+                          )}
+                          Remove from library
+                        </Button>
+                      )}
+                    </TableCell>
+                  </>
+                ) : (
+                  <>
+                    <TableCell className="align-top">
+                      <CandidateCell
+                        state={state}
+                        onSearch={() => searchOne(album.album_id)}
+                        onApply={(url) => applyCandidate(album.album_id, url)}
+                      />
+                    </TableCell>
 
-                <TableCell className="text-right align-top">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCoverAlbumId(album.album_id)}
-                  >
-                    <ImageOff className="h-4 w-4 mr-1" />
-                    Change cover art
-                  </Button>
-                </TableCell>
+                    <TableCell className="text-right align-top">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setCoverAlbumId(album.album_id)}
+                      >
+                        <ImageOff className="h-4 w-4 mr-1" />
+                        Change cover art
+                      </Button>
+                    </TableCell>
+                  </>
+                )}
               </TableRow>
             )
           })}

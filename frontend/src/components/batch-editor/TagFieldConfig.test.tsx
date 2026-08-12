@@ -164,6 +164,53 @@ describe('TagFieldConfig', () => {
         })
       )
     })
+
+    it('should not offer Manual mode unless the host enables it', async () => {
+      const onChange = vi.fn()
+      renderComponent({ tag: 'track_number', state: defaultState, onChange })
+
+      fireEvent.click(screen.getByRole('combobox'))
+
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: 'Sequence' })).toBeInTheDocument()
+        expect(screen.queryByRole('option', { name: 'Manual' })).not.toBeInTheDocument()
+      })
+    })
+
+    it('should offer Manual mode when allowManualTrackNumbers is set and select it as explicit', async () => {
+      const onChange = vi.fn()
+      render(
+        <TagFieldConfig
+          tag="track_number"
+          state={defaultState}
+          onChange={onChange}
+          allowManualTrackNumbers
+        />
+      )
+
+      fireEvent.click(screen.getByRole('combobox'))
+
+      const manualOption = await screen.findByRole('option', { name: 'Manual' })
+      fireEvent.click(manualOption)
+
+      expect(onChange).toHaveBeenCalledWith(
+        expect.objectContaining({ enabled: true, mode: 'explicit' })
+      )
+    })
+
+    it('should show the Manual explanation panel when mode is explicit', () => {
+      const onChange = vi.fn()
+      render(
+        <TagFieldConfig
+          tag="track_number"
+          state={{ ...defaultState, enabled: true, mode: 'explicit' }}
+          onChange={onChange}
+          allowManualTrackNumbers
+        />
+      )
+
+      expect(screen.getByText('Manual Numbering:')).toBeInTheDocument()
+    })
   })
 
   describe('Fixed mode input', () => {

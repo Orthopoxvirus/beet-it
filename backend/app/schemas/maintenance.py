@@ -15,6 +15,9 @@ class MissingCoverAlbum(BaseModel):
     album_id: int
     title: str
     artist: str
+    # True when the album folder itself is gone from disk (ghost entry) —
+    # cover search is pointless; the UI offers a DB-only removal instead.
+    folder_missing: bool = False
 
 
 class MissingCoverResponse(BaseModel):

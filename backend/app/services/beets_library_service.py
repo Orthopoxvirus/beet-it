@@ -1536,7 +1536,8 @@ class BeetsLibraryService:
         return stats
 
     def delete_album(self, db_path: str, album_id: int) -> bool:
-        """Remove an album and its items from the beets database.
+        """Remove an album, its items, and their flexible-attribute rows from
+        the beets database.
 
         This only touches the DB — the audio files on disk are left in place
         (they will be overwritten by the subsequent import if the destination
@@ -1547,10 +1548,32 @@ class BeetsLibraryService:
         """
         self._validate_database_path(db_path)
 
+        def _table_exists(cursor, name: str) -> bool:
+            cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (name,),
+            )
+            return cursor.fetchone() is not None
+
         try:
             connection = self._connect_readwrite(db_path)
             cursor = connection.cursor()
 
+            # Flexible attributes live in side tables keyed by entity id; beets
+            # has no FK cascade, so clean them explicitly (before the items go)
+            # or they linger as orphans. Guarded: stripped-down DBs may lack
+            # the tables.
+            if _table_exists(cursor, "item_attributes"):
+                cursor.execute(
+                    "DELETE FROM item_attributes WHERE entity_id IN "
+                    "(SELECT id FROM items WHERE album_id = ?)",
+                    (album_id,),
+                )
+            if _table_exists(cursor, "album_attributes"):
+                cursor.execute(
+                    "DELETE FROM album_attributes WHERE entity_id = ?",
+                    (album_id,),
+                )
             cursor.execute("DELETE FROM items WHERE album_id = ?", (album_id,))
             cursor.execute("DELETE FROM albums WHERE id = ?", (album_id,))
             rows_affected = cursor.rowcount

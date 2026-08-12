@@ -118,6 +118,8 @@ interface LocalAlbumSectionProps {
   previewData: Map<number, ItemPreview>
   onItemsLoaded: (ids: number[]) => void
   defaultCollapsed?: boolean
+  manualTrackNumbers?: boolean
+  onManualNumbersChange?: (values: Record<number, string>) => void
 }
 
 /**
@@ -133,6 +135,8 @@ function LocalAlbumSection({
   previewData,
   onItemsLoaded,
   defaultCollapsed = false,
+  manualTrackNumbers = false,
+  onManualNumbersChange,
 }: LocalAlbumSectionProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
 
@@ -163,6 +167,8 @@ function LocalAlbumSection({
           showSummary
           previewData={previewData}
           onItemsLoaded={onItemsLoaded}
+          manualTrackNumbers={manualTrackNumbers}
+          onManualNumbersChange={onManualNumbersChange}
         />
       </div>
     </div>
@@ -192,6 +198,54 @@ export default function ImportBeetsPage() {
   const handlePreviewChange = useCallback(
     (data: Map<number, ItemPreview>) => setPreviewData(data),
     []
+  )
+
+  // Manual track numbering: on while the batch editor's Track Number field is
+  // in Manual mode. Each album table reports its typed/dragged numbers into
+  // its own per-path slot; the merged map feeds the editor's explicit rule.
+  const [manualTrackNumbers, setManualTrackNumbers] = useState(false)
+  const [manualValuesByPath, setManualValuesByPath] = useState<
+    Record<string, Record<number, string>>
+  >({})
+
+  const handleTrackNumberManualChange = useCallback((manual: boolean) => {
+    setManualTrackNumbers(manual)
+    if (!manual) setManualValuesByPath({})
+  }, [])
+
+  const handleManualNumbersChange = useCallback(
+    (path: string, values: Record<number, string>) => {
+      setManualValuesByPath((prev) => {
+        const existing = prev[path]
+        if (
+          existing &&
+          Object.keys(existing).length === Object.keys(values).length &&
+          Object.entries(values).every(([id, v]) => existing[Number(id)] === v)
+        ) {
+          return prev
+        }
+        return { ...prev, [path]: values }
+      })
+    },
+    []
+  )
+
+  // Stable per-path onManualNumbersChange wrappers (same pattern as the
+  // onItemsLoaded handlers below).
+  const manualHandlersRef = useRef<Map<string, (values: Record<number, string>) => void>>(
+    new Map()
+  )
+  const getManualNumbersHandler = useCallback(
+    (path: string) => {
+      const cache = manualHandlersRef.current
+      let handler = cache.get(path)
+      if (!handler) {
+        handler = (values: Record<number, string>) => handleManualNumbersChange(path, values)
+        cache.set(path, handler)
+      }
+      return handler
+    },
+    [handleManualNumbersChange]
   )
 
   // Selecting an album clears any folder selection, and vice versa.
@@ -273,12 +327,25 @@ export default function ImportBeetsPage() {
     [handleItemsLoaded]
   )
 
-  // Clear stale per-album IDs and previews when the active selection changes so
-  // data from a previous album/folder doesn't bleed across.
+  // The merged manual numbers of every album currently shown, for the batch
+  // editor's explicit rule. Item IDs are globally unique, so a plain merge is
+  // safe across albums.
+  const mergedManualValues = useMemo(() => {
+    const merged: Record<number, string> = {}
+    for (const p of activePaths) {
+      Object.assign(merged, manualValuesByPath[p] ?? {})
+    }
+    return merged
+  }, [activePaths, manualValuesByPath])
+
+  // Clear stale per-album IDs, previews and manual numbers when the active
+  // selection changes so data from a previous album/folder doesn't bleed
+  // across.
   const activeKey = activePaths.join('|')
   useEffect(() => {
     setItemIdsByPath({})
     setPreviewData(new Map())
+    setManualValuesByPath({})
   }, [activeKey])
 
   // Cards slotted between the album list and the candidate details, matching the
@@ -295,6 +362,8 @@ export default function ImportBeetsPage() {
         disabled={tableItemIds.length === 0}
         collapsible
         defaultCollapsed
+        manualTrackNumbers={mergedManualValues}
+        onTrackNumberManualChange={handleTrackNumberManualChange}
       />
 
       <CollapsibleCard
@@ -325,6 +394,8 @@ export default function ImportBeetsPage() {
                 trackCount={itemIdsByPath[path]?.length}
                 previewData={previewData}
                 onItemsLoaded={getItemsLoadedHandler(path)}
+                manualTrackNumbers={manualTrackNumbers}
+                onManualNumbersChange={getManualNumbersHandler(path)}
               />
             ))}
           </>
@@ -335,6 +406,8 @@ export default function ImportBeetsPage() {
             showSummary
             previewData={previewData}
             onItemsLoaded={getItemsLoadedHandler(activePaths[0])}
+            manualTrackNumbers={manualTrackNumbers}
+            onManualNumbersChange={getManualNumbersHandler(activePaths[0])}
           />
         )}
       </CollapsibleCard>

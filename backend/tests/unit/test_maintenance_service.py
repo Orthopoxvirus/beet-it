@@ -86,6 +86,45 @@ def test_list_albums_missing_cover():
         missing = maintenance_service.list_albums_missing_cover(svc, db, music)
         missing_ids = sorted(m["album_id"] for m in missing)
         assert missing_ids == [2, 4]
+        # Both folders exist on disk — not ghosts.
+        assert all(m["folder_missing"] is False for m in missing)
+
+
+def test_list_albums_missing_cover_flags_ghost_albums():
+    """Albums whose folder is gone from disk are flagged as ghosts (#207)."""
+    svc = BeetsLibraryService()
+    with tempfile.TemporaryDirectory() as tmp:
+        music = os.path.join(tmp, "music")
+        # album 1: healthy missing-cover album (folder exists, no cover)
+        _touch(os.path.join(music, "a1", "t.mp3"))
+        db = _make_db(
+            tmp,
+            albums=[
+                {"id": 1, "album": "Mätzler Bräu Sessions",
+                 "albumartist": "Jürgen Groß", "artpath": None},
+                # album 2: ghost — item path rooted at "/", file long gone
+                # (the botched-import shape from #207)
+                {"id": 2, "album": "Geissbock Chärly reist um die Welt",
+                 "albumartist": "", "artpath": None},
+                # album 3: ghost — relative item path with no matching folder
+                # under the library root
+                {"id": 3, "album": "Verschwundene Grüße",
+                 "albumartist": "Über Art", "artpath": None},
+            ],
+            items=[
+                {"id": 1, "album_id": 1, "path": os.path.join(music, "a1", "t.mp3")},
+                {"id": 2, "album_id": 2,
+                 "path": "/Geissbock Chärly reist um die Welt/01 -.mp3"},
+                {"id": 3, "album_id": 3, "path": "gone/album/01 track.mp3"},
+            ],
+        )
+
+        missing = maintenance_service.list_albums_missing_cover(svc, db, music)
+        by_id = {m["album_id"]: m for m in missing}
+        assert sorted(by_id) == [1, 2, 3]
+        assert by_id[1]["folder_missing"] is False
+        assert by_id[2]["folder_missing"] is True
+        assert by_id[3]["folder_missing"] is True
 
 
 # ---------------------------------------------------------------------------

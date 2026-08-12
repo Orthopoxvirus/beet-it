@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { FixedModeInput } from './FixedModeInput'
 import { RegexModeInput } from './RegexModeInput'
 import { SequenceModeInput } from './SequenceModeInput'
+import { ManualModeInput } from './ManualModeInput'
 import type {
   TagName,
   TransformationMode,
@@ -32,6 +33,12 @@ interface TagFieldConfigProps {
   disabled?: boolean
   /** Pattern validation error (for regex mode) */
   patternError?: string
+  /**
+   * Offer Manual mode for Track Number. Only hosts whose track table supplies
+   * the per-item numbers (the beets import page) should enable this — without
+   * that wiring the mode would silently do nothing.
+   */
+  allowManualTrackNumbers?: boolean
 }
 
 // ============================================================================
@@ -56,6 +63,8 @@ const TRACK_NUMBER_MODE_OPTIONS: ModeOption[] = [
   { value: 'sequence', label: 'Sequence' },
 ]
 
+const MANUAL_MODE_OPTION: ModeOption = { value: 'explicit', label: 'Manual' }
+
 // ============================================================================
 // Component
 // ============================================================================
@@ -70,8 +79,14 @@ export function TagFieldConfig({
   onChange,
   disabled = false,
   patternError,
+  allowManualTrackNumbers = false,
 }: TagFieldConfigProps) {
-  const modeOptions = tag === 'track_number' ? TRACK_NUMBER_MODE_OPTIONS : STANDARD_MODE_OPTIONS
+  const modeOptions =
+    tag === 'track_number'
+      ? allowManualTrackNumbers
+        ? [...TRACK_NUMBER_MODE_OPTIONS, MANUAL_MODE_OPTION]
+        : TRACK_NUMBER_MODE_OPTIONS
+      : STANDARD_MODE_OPTIONS
   const modeId = `tag-mode-${tag}`
   const currentMode = state.enabled ? (state.mode || 'none') : 'none'
 
@@ -150,6 +165,9 @@ export function TagFieldConfig({
             disabled={disabled}
           />
         )
+
+      case 'explicit':
+        return <ManualModeInput />
 
       default:
         return null

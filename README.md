@@ -8,16 +8,72 @@ A web-based UI for managing one or many [beets](https://beets.io/) music librari
 
 ## Features
 
-- **Multi-library**: manage several independent beets libraries from one UI.
-- **Import workflow**: drag-and-drop upload, folder-tree browser, per-folder analyse & import, MusicBrainz candidate selection, manual-candidate search, multi-part release splitting.
-- **Album browsing**: paginated album grid per library, alphabet navigation, album detail page with inline audio playback and cover-art replacement (file / drag-and-drop / URL).
-- **Titles view**: library-wide track search with BPM-range filtering, per-track preview playback, and per-title downloads.
-- **BPM analysis**: automatic BPM detection on import plus a resumable library-wide backfill with live progress.
-- **Batch tag editing**: rule-based edits (fixed / regex / sequence) across tracks already in a library, with automatic `beet update -a` sync back to the beets DB.
-- **Maintenance tools**: single-cover guarantee (adopting stray images as album art), in-place WAV→FLAC conversion, duplicate-row cleanup.
-- **Beets config editor**: edit `config.yaml` for any library through the UI — path templates with click-to-insert variables, plugin management, path validation with one-click initialisation.
-- **Activity monitor**: live progress for imports, scans, analyses, and batch updates; history of completed and failed tasks.
-- **Unsaved-changes guard**, **import-folder watchers**, **per-library beets config navigation**, and more.
+- **Multi-library** — manage one or many independent beets libraries from a single app.
+- **Web UI** — the whole workflow runs in the browser; no beets CLI needed day to day.
+- **Async operations** — imports, scans, analyses and batch jobs run in background workers, with live progress and task history in the activity monitor.
+- **Upload to import** — upload music from the UI straight into a library's import area.
+- **Import tagger** — prepare albums before import with rule-based tagging: regex rules or fixed values.
+- **Batch analysis** — run beets' analysis across whole import folders in one go.
+- **Assisted import** — beets import with candidate selection, plus manual candidates via the integrated search or an external link. Multi-part releases can be split and WAV/WMA sources converted before import.
+- **Batch edit & beets sync** — after import, apply rule-based tag edits (fixed / regex / sequence) across tracks, synced back to the beets DB.
+- **Album browsing** — list albums by album, album artist or folder; album pages with inline playback.
+- **Cover management** — replace album covers via file, drag-and-drop or URL.
+- **Title search** — library-wide track search with BPM-range filtering and per-track preview playback.
+- **Batch BPM analysis** — BPM detection on import plus a resumable library-wide backfill.
+- **Download center** — gather titles and albums into batch downloads; batches are prepared in the background and picked up in the download center.
+- **Beets config editor** — edit each library's `config.yaml` in the UI: path templates with click-to-insert variables, plugin management, path validation.
+- **Maintenance** — fix missing cover art, handle unimported (stray) files, fill missing BPM tags.
+
+## Quick install
+
+Every release is published as prebuilt images to the GitHub Container Registry — no local build needed:
+
+```bash
+git clone https://github.com/Orthopoxvirus/beet-it.git
+cd beet-it
+
+cp .env.example .env
+# edit .env: set POSTGRES_PASSWORD and SECRET_KEY
+
+mkdir -p data/import data/upload config
+
+# publish the UI on http://localhost:8080/ (skip if you front it with a reverse proxy)
+cp docker-compose.override.yaml.example docker-compose.override.yaml
+
+IMAGE_PREFIX=ghcr.io/orthopoxvirus/beet-it IMAGE_TAG=latest docker compose up -d
+docker compose exec backend alembic upgrade head   # one-time schema setup
+```
+
+Open `http://localhost:8080/` and create your first library. Pin `IMAGE_TAG` to a release tag (e.g. `v0.1.0`) for reproducible deploys, or set `IMAGE_PREFIX`/`IMAGE_TAG` in `.env`. To build from source instead, see [Getting started](#getting-started).
+
+## Securing your instance
+
+beet-it ships **without authentication by default** — it's built for trusted
+home-LAN use. Decide how you expose it *before* anyone but you can reach it:
+
+1. **Don't expose it at all** (simplest, recommended). The compose stack
+   publishes no host ports by default; keep it that way and reach the UI over
+   your LAN or a VPN such as WireGuard or Tailscale.
+2. **Reverse proxy with SSO / forward auth** (recommended when it must be
+   reachable from outside). Put the `frontend` service behind Traefik, Caddy
+   or nginx with HTTPS, and gate it with your identity provider — e.g.
+   [Authentik](https://goauthentik.io/) or [Authelia](https://www.authelia.com/)
+   via forward auth, or oauth2-proxy. UI and API are same-origin (the
+   frontend's nginx proxies `/api/` to the backend), so a single auth gate in
+   front of the frontend covers everything.
+3. **Built-in HTTP Basic Auth.** Set `BASIC_AUTH_USER` + `BASIC_AUTH_PASSWORD`
+   in `.env`. This is enforced by the backend, so every API route — all data
+   and actions — requires credentials; only the static UI shell itself loads
+   without them. Fine as a quick gate or second layer, less polished than a
+   proxy login.
+
+Options 2 and 3 combine well: SSO at the proxy, Basic Auth as a backstop.
+Never expose the stack over plain HTTP to the internet.
+
+Other security notes:
+
+- Cover-art downloads validate URLs against private/loopback address ranges
+  (including every redirect hop) and enforce image magic bytes + a 10 MB cap.
 
 ## Tech stack
 
@@ -34,6 +90,8 @@ A web-based UI for managing one or many [beets](https://beets.io/) music librari
 Local Python / Node installs are **not required** — all services run in containers. See [`docs/development.md`](docs/development.md#faster-inner-loop) if you want to iterate on a service without rebuilding.
 
 ## Getting started
+
+This is the build-from-source walkthrough; for prebuilt images see [Quick install](#quick-install) above.
 
 ### 1. Clone
 
@@ -71,14 +129,6 @@ docker compose up -d
 ```
 
 First build takes a few minutes. Subsequent rebuilds are much faster thanks to layer caching.
-
-Prefer prebuilt images? Every release is published to the GitHub Container Registry — skip the build by pointing compose at them:
-
-```bash
-IMAGE_PREFIX=ghcr.io/orthopoxvirus/beet-it IMAGE_TAG=latest docker compose up -d
-```
-
-(Or set `IMAGE_PREFIX`/`IMAGE_TAG` in `.env`. Pin `IMAGE_TAG` to a release tag like `v1.0.0` for reproducible deploys.)
 
 ### 5. Run database migrations
 
@@ -209,35 +259,6 @@ More in [`docs/testing.md`](docs/testing.md) and [`docs/development.md`](docs/de
 
 - [beets](https://beets.io/) — the music library manager this project is a UI for.
 - [FastAPI](https://fastapi.tiangolo.com/), [React](https://react.dev/), [shadcn/ui](https://ui.shadcn.com/).
-
-## Securing your instance
-
-beet-it ships **without authentication by default** — it's built for trusted
-home-LAN use. Decide how you expose it *before* anyone but you can reach it:
-
-1. **Don't expose it at all** (simplest, recommended). The compose stack
-   publishes no host ports by default; keep it that way and reach the UI over
-   your LAN or a VPN such as WireGuard or Tailscale.
-2. **Reverse proxy with SSO / forward auth** (recommended when it must be
-   reachable from outside). Put the `frontend` service behind Traefik, Caddy
-   or nginx with HTTPS, and gate it with your identity provider — e.g.
-   [Authentik](https://goauthentik.io/) or [Authelia](https://www.authelia.com/)
-   via forward auth, or oauth2-proxy. UI and API are same-origin (the
-   frontend's nginx proxies `/api/` to the backend), so a single auth gate in
-   front of the frontend covers everything.
-3. **Built-in HTTP Basic Auth.** Set `BASIC_AUTH_USER` + `BASIC_AUTH_PASSWORD`
-   in `.env`. This is enforced by the backend, so every API route — all data
-   and actions — requires credentials; only the static UI shell itself loads
-   without them. Fine as a quick gate or second layer, less polished than a
-   proxy login.
-
-Options 2 and 3 combine well: SSO at the proxy, Basic Auth as a backstop.
-Never expose the stack over plain HTTP to the internet.
-
-Other security notes:
-
-- Cover-art downloads validate URLs against private/loopback address ranges
-  (including every redirect hop) and enforce image magic bytes + a 10 MB cap.
 
 ## License
 

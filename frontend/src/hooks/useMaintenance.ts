@@ -12,6 +12,7 @@ import {
   cancelBpmBackfill,
   type StrayAction,
 } from '@/api/maintenance'
+import { deleteAlbum } from '@/api/albums'
 import { albumKeys } from './useAlbums'
 
 export const maintenanceKeys = {
@@ -30,6 +31,31 @@ export function useMissingCover(slug: string) {
     queryFn: () => fetchMissingCover(slug),
     enabled: !!slug,
     retry: false,
+  })
+}
+
+/**
+ * Remove a ghost album (folder gone from disk) from the beets DB.
+ *
+ * Uses the album delete endpoint's `detach` mode — DB rows only, disk is
+ * never touched — which is the only mode that works when the folder no
+ * longer exists.
+ */
+export function useRemoveGhostAlbum(slug: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (albumId: number) => deleteAlbum(slug, albumId, 'detach'),
+    onSuccess: (_, albumId) => {
+      queryClient.invalidateQueries({
+        queryKey: maintenanceKeys.missingCover(slug),
+      })
+      // The album no longer exists — drop its caches and refresh every list
+      // that rendered it (mirrors useDeleteAlbum).
+      queryClient.removeQueries({ queryKey: albumKeys.detail(slug, albumId) })
+      queryClient.removeQueries({ queryKey: albumKeys.tracks(slug, albumId) })
+      queryClient.invalidateQueries({ queryKey: albumKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: albumKeys.letters(slug) })
+    },
   })
 }
 

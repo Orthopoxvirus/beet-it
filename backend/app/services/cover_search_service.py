@@ -68,9 +68,12 @@ def _host_is_public(host: str) -> bool:
 
 
 async def _itunes_candidates(
-    client: httpx.AsyncClient, artist: str, album: str, limit: int
+    client: httpx.AsyncClient, album: str, limit: int
 ) -> list[str]:
-    term = f"{artist} {album}".strip()
+    # Album title only: albumartist is often empty or inconsistent in
+    # audio-play libraries, so folding it into the term only over-constrains
+    # the match (issue #210). The mb_albumid-based CAA lookup is unaffected.
+    term = album.strip()
     if not term:
         return []
     try:
@@ -93,9 +96,10 @@ async def _itunes_candidates(
 
 
 async def _deezer_candidates(
-    client: httpx.AsyncClient, artist: str, album: str, limit: int
+    client: httpx.AsyncClient, album: str, limit: int
 ) -> list[str]:
-    term = f"{artist} {album}".strip()
+    # Album title only — see _itunes_candidates (issue #210).
+    term = album.strip()
     if not term:
         return []
     try:
@@ -194,7 +198,6 @@ async def _measure(client: httpx.AsyncClient, url: str) -> Optional[dict]:
 
 
 async def search_cover_art(
-    artist: str,
     album: str,
     mb_albumid: Optional[str] = None,
 ) -> list[dict]:
@@ -203,8 +206,8 @@ async def search_cover_art(
         timeout=_TIMEOUT, follow_redirects=True, headers=_HEADERS
     ) as client:
         gathered = await asyncio.gather(
-            _itunes_candidates(client, artist, album, PER_SOURCE_LIMIT),
-            _deezer_candidates(client, artist, album, PER_SOURCE_LIMIT),
+            _itunes_candidates(client, album, PER_SOURCE_LIMIT),
+            _deezer_candidates(client, album, PER_SOURCE_LIMIT),
             _caa_candidates(client, mb_albumid or ""),
             return_exceptions=True,
         )

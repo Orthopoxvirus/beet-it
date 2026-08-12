@@ -25,6 +25,7 @@ import type {
   FixedRule,
   RegexRule,
   SequenceRule,
+  ExplicitRule,
   ItemPreview,
 } from '@/types/batch-tag-editor'
 import { EDITABLE_TAGS } from '@/types/batch-tag-editor'
@@ -46,6 +47,17 @@ interface BatchTagEditorFormProps {
   collapsible?: boolean
   /** Initial collapsed state when {@link collapsible} is set. */
   defaultCollapsed?: boolean
+  /**
+   * Item-id → track-number map from the Local Album table's Manual mode
+   * (typed numbers / drag reorder). Feeds the explicit rule while the
+   * Track Number field is set to Manual.
+   */
+  manualTrackNumbers?: Record<number, string>
+  /**
+   * Notifies the parent when Track Number enters/leaves Manual mode, so the
+   * track table can show/hide its number inputs and drag handles.
+   */
+  onTrackNumberManualChange?: (manual: boolean) => void
 }
 
 // ============================================================================
@@ -77,7 +89,10 @@ function createInitialFormState(): BatchTagFormState {
 // Rule Building
 // ============================================================================
 
-function buildRulesFromState(formState: BatchTagFormState): TransformationRule[] {
+function buildRulesFromState(
+  formState: BatchTagFormState,
+  manualTrackNumbers?: Record<number, string>
+): TransformationRule[] {
   const rules: TransformationRule[] = []
 
   for (const tag of EDITABLE_TAGS) {
@@ -117,6 +132,22 @@ function buildRulesFromState(formState: BatchTagFormState): TransformationRule[]
           } as SequenceRule)
         }
         break
+
+      case 'explicit':
+        // Manual mode: the values come from the Local Album table (typed
+        // numbers / drag reorder), not from this form. No edits yet → no rule.
+        if (
+          tag === 'track_number' &&
+          manualTrackNumbers &&
+          Object.keys(manualTrackNumbers).length > 0
+        ) {
+          rules.push({
+            tag: 'track_number',
+            mode: 'explicit',
+            values: manualTrackNumbers,
+          } as ExplicitRule)
+        }
+        break
     }
   }
 
@@ -134,6 +165,8 @@ export function BatchTagEditorForm({
   disabled: externalDisabled = false,
   collapsible = false,
   defaultCollapsed = false,
+  manualTrackNumbers,
+  onTrackNumberManualChange,
 }: BatchTagEditorFormProps) {
   // Collapse state (only meaningful when `collapsible`)
   const [isCollapsed, setIsCollapsed] = useState(collapsible && defaultCollapsed)
@@ -145,7 +178,18 @@ export function BatchTagEditorForm({
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
 
   // Build rules from form state
-  const rules = useMemo(() => buildRulesFromState(formState), [formState])
+  const rules = useMemo(
+    () => buildRulesFromState(formState, manualTrackNumbers),
+    [formState, manualTrackNumbers]
+  )
+
+  // Tell the parent when Track Number enters/leaves Manual mode, so the track
+  // table can switch its number inputs and drag handles on/off.
+  const isTrackNumberManual =
+    formState.track_number.enabled && formState.track_number.mode === 'explicit'
+  useEffect(() => {
+    onTrackNumberManualChange?.(isTrackNumberManual)
+  }, [isTrackNumberManual, onTrackNumberManualChange])
 
   // Debounce rules for preview (300ms)
   const debouncedRules = useDebouncedValue(rules, 300)
@@ -329,6 +373,7 @@ export function BatchTagEditorForm({
                     state={formState[tag]}
                     onChange={(state) => handleFieldChange(tag, state)}
                     disabled={isDisabled}
+                    allowManualTrackNumbers={!!onTrackNumberManualChange}
                   />
                 ))}
               </div>
@@ -398,7 +443,8 @@ export function BatchTagEditorForm({
             <ul className="text-sm text-muted-foreground space-y-1">
               {rules.map((rule, index) => (
                 <li key={index}>
-                  <span className="font-medium">{rule.tag}</span>: {rule.mode} mode
+                  <span className="font-medium">{rule.tag}</span>:{' '}
+                  {rule.mode === 'explicit' ? 'manual' : rule.mode} mode
                 </li>
               ))}
             </ul>

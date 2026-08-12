@@ -3,7 +3,6 @@ import { Check, ChevronsUpDown, Search, Users } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 
@@ -22,8 +21,10 @@ interface ArtistFilterProps {
  * Multi-select album-artist filter for the Titles page.
  *
  * Ordering, top to bottom: checked artists first, then artists present in the
- * current search/BPM result, then the rest. A search box filters the visible
- * list; toggling an artist keeps the popover open.
+ * current search/BPM result, then the rest — the latter shown disabled, since
+ * they have no track under the active search/BPM filter and picking one could
+ * only empty the table. A search box filters the visible list; toggling an
+ * artist keeps the popover open.
  */
 export function ArtistFilter({
   inResult,
@@ -37,7 +38,7 @@ export function ArtistFilter({
 
   const selectedSet = useMemo(() => new Set(selected), [selected])
 
-  // Checked → in-result (unchecked) → others (unchecked). The backend already
+  // Checked → in-result (unchecked) → others (disabled). The backend already
   // returns each group alphabetical; selected is sorted here for a stable order.
   const ordered = useMemo(() => {
     const selectedSorted = [...selected].sort((a, b) => a.localeCompare(b))
@@ -68,20 +69,29 @@ export function ArtistFilter({
       ? 'Album artists'
       : `${selected.length} album artist${selected.length === 1 ? '' : 's'}`
 
-  const renderOption = (artist: string) => {
+  const renderOption = (artist: string, opts?: { disabled?: boolean }) => {
     const isSelected = selectedSet.has(artist)
+    const disabled = opts?.disabled ?? false
     return (
       <button
         key={artist}
         type="button"
         role="option"
         aria-selected={isSelected}
-        onClick={() => toggle(artist)}
-        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent"
+        aria-disabled={disabled || undefined}
+        disabled={disabled}
+        onClick={disabled ? undefined : () => toggle(artist)}
+        className={cn(
+          'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none',
+          disabled
+            ? 'cursor-not-allowed text-muted-foreground opacity-60'
+            : 'hover:bg-accent focus-visible:bg-accent'
+        )}
       >
         <span
           className={cn(
-            'flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-primary',
+            'flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border',
+            disabled ? 'border-muted-foreground/40' : 'border-primary',
             isSelected && 'bg-primary text-primary-foreground'
           )}
           aria-hidden="true"
@@ -124,7 +134,11 @@ export function ArtistFilter({
             aria-label="Filter album artists"
           />
         </div>
-        <ScrollArea className="max-h-64 p-1">
+        {/* Native max-height scroll container: a Radix ScrollArea's Viewport
+            uses height:100%, which can't resolve against a max-height-only
+            parent, so it clips instead of scrolling. A plain overflow-y-auto
+            div grows to content up to the cap, then scrolls. */}
+        <div className="max-h-64 overflow-y-auto p-1">
           {isLoading && totalCount === 0 ? (
             <p className="px-2 py-6 text-center text-sm text-muted-foreground">Loading…</p>
           ) : totalCount === 0 ? (
@@ -135,8 +149,8 @@ export function ArtistFilter({
             </p>
           ) : (
             <>
-              {visibleSelected.map(renderOption)}
-              {visibleInResult.map(renderOption)}
+              {visibleSelected.map((artist) => renderOption(artist))}
+              {visibleInResult.map((artist) => renderOption(artist))}
               {visibleOthers.length > 0 && (
                 <>
                   {(visibleSelected.length > 0 || visibleInResult.length > 0) && (
@@ -144,12 +158,12 @@ export function ArtistFilter({
                       Not in current results
                     </p>
                   )}
-                  {visibleOthers.map(renderOption)}
+                  {visibleOthers.map((artist) => renderOption(artist, { disabled: true }))}
                 </>
               )}
             </>
           )}
-        </ScrollArea>
+        </div>
         {selected.length > 0 && (
           <div className="border-t p-1">
             <Button
