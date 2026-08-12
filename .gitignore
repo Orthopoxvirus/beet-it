@@ -56,8 +56,9 @@ backend/build/
 .DS_Store
 Thumbs.db
 
-# Data directories
-data/
+# Data directories (root-level runtime data only — an unanchored `data/` would
+# also swallow tracked source dirs like frontend/src/data/)
+/data/
 
 # Per-library beets configs (user-specific; never commit).
 # The example template stays tracked so new clones have a reference.

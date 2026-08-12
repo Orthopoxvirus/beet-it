@@ -16,7 +16,7 @@ settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
     description="A web-based UI for managing music libraries with beets",
-    version="0.2.0",
+    version="0.2.1",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -81,7 +81,7 @@ async def root():
     """Root endpoint."""
     return {
         "name": settings.app_name,
-        "version": "0.2.0",
+        "version": "0.2.1",
         "docs": "/docs"
     }
 
